@@ -45,6 +45,9 @@ func NewMiner(nWorkers int) *Miner {
 func (this *Miner) Stop() {
 	atomic.StoreUint32(&this.stop, 1)
 	this.ctxCancel()
+	for _, ch := range this.tasks {
+		close(ch)
+	}
 }
 
 func (this *Miner) MineBlock(ctx context.Context, block *Block) error {
@@ -63,11 +66,11 @@ func (this *Miner) MineBlock(ctx context.Context, block *Block) error {
 
 	for _, tch := range this.tasks {
 		select {
-		case tch <- task:
 		case <- task.ctx.Done():
 			return task.ctx.Err()
 		case <- this.ctx.Done():
 			return this.ctx.Err()
+		case tch <- task:
 		}
 	}
 
