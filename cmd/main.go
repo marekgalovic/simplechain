@@ -57,7 +57,7 @@ func main() {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
 	go func() {
-		time.Sleep(10 * time.Second)
+		time.Sleep(20 * time.Second)
 		ctxCancel()
 	}()
 	if err := m.MineBlock(ctx, b); err != nil {

@@ -6,10 +6,11 @@ import (
 	"bytes";
 	"hash";
 	"math/rand";
+	"sync/atomic";
 )
 
 var (
-	ErrInterrupted error = errors.New("Interrupted")
+	ErrInterrupted error = errors.New("Mining task interrupted")
 )
 
 type mineBlockTask struct {
@@ -17,14 +18,14 @@ type mineBlockTask struct {
 	block *Block
 	result chan []byte
 	err chan error
-	done bool
+	done uint32
 }
 
 type Miner struct {
 	ctx context.Context
 	ctxCancel context.CancelFunc
 	tasks []chan *mineBlockTask
-	stop bool
+	stop uint32
 }
 
 func NewMiner(nWorkers int) *Miner {
@@ -42,7 +43,7 @@ func NewMiner(nWorkers int) *Miner {
 }
 
 func (this *Miner) Stop() {
-	this.stop = true
+	atomic.StoreUint32(&this.stop, 1)
 	this.ctxCancel()
 }
 
@@ -52,10 +53,12 @@ func (this *Miner) MineBlock(ctx context.Context, block *Block) error {
 		block: block,
 		result: make(chan []byte),
 		err: make(chan error),
-		done: false,
+		done: 0,
 	}
 	defer func() {
-		task.done = true
+		atomic.StoreUint32(&task.done, 1)
+		close(task.result)
+		close(task.err)
 	}()
 
 	for _, tch := range this.tasks {
@@ -72,6 +75,8 @@ func (this *Miner) MineBlock(ctx context.Context, block *Block) error {
 	case r := <- task.result:
 		block.setNonce(r)
 		return nil
+	case err := <- task.err:
+		return err
 	case <- task.ctx.Done():
 		return task.ctx.Err()
 	case <- this.ctx.Done():
@@ -107,7 +112,7 @@ func (this *Miner) mineBlock(task *mineBlockTask, generator *rand.Rand) {
 	blockBytes := buffer.Bytes()
 	n := len(blockBytes)
 
-	for !task.done || !this.stop {
+	for (atomic.LoadUint32(&task.done) == 0) && (atomic.LoadUint32(&this.stop) == 0) {
 		if _, err := generator.Read(blockBytes[n-NONCE_SIZE:n]); err != nil {
 			this.writeTaskError(task, err)
 			return
@@ -123,12 +128,15 @@ func (this *Miner) mineBlock(task *mineBlockTask, generator *rand.Rand) {
 			return
 		}
 	}
-	if this.stop {
+	if atomic.LoadUint32(&this.stop) > 0 {
 		this.writeTaskError(task, ErrInterrupted)
 	}
 }
 
 func (this *Miner) writeTaskError(task *mineBlockTask, err error) {
+	if atomic.LoadUint32(&task.done) > 0 {
+		return
+	}
 	select {
 	case <- this.ctx.Done():
 	case <- task.ctx.Done():
@@ -137,6 +145,9 @@ func (this *Miner) writeTaskError(task *mineBlockTask, err error) {
 }
 
 func (this *Miner) writeTaskResult(task *mineBlockTask, result []byte) {
+	if atomic.LoadUint32(&task.done) > 0 {
+		return
+	}
 	select {
 	case <- this.ctx.Done():
 	case <- task.ctx.Done():
