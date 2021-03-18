@@ -1,6 +1,7 @@
 package simplechain;
 
 import (
+	"time";
 	"crypto/rsa";
 )
 
@@ -26,11 +27,12 @@ func (this *Wallet) PublicKey() *rsa.PublicKey {
 	return this.key.Public().(*rsa.PublicKey)
 }
 
-func (this *Wallet) CreateTransaction(dst WalletAddress, amount uint64) (*Transaction, error) {
+func (this *Wallet) Send(dst WalletAddress, amount uint64) (*Transaction, error) {
 	transaction := &Transaction {
 		src: this.Address(),
 		dst: dst,
 		amount: amount,
+		timestamp: time.Now(),
 	}
 
 	if err := transaction.Sign(this.key); err != nil {

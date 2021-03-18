@@ -1,10 +1,11 @@
 package simplechain;
 
 import (
+	"io";
+	"time";
 	"hash";
 	"crypto";
 	"crypto/rand";
-	"crypto/sha256";
 	"crypto/rsa";
 	"encoding/binary";
 	"errors";
@@ -18,6 +19,7 @@ type Transaction struct {
 	src WalletAddress
 	dst WalletAddress
 	amount uint64
+	timestamp time.Time
 	signature []byte
 }
 
@@ -42,8 +44,10 @@ func (this *Transaction) Sign(key *rsa.PrivateKey) error {
 		return ErrTransactionAlreadySigned
 	}
 
-	hash := sha256.New()
-	err := this.writeHash(hash)
+	hash := sha256HashPool.Get().(hash.Hash)
+	defer sha256HashPool.Put(hash)
+	hash.Reset()
+	err := this.write(hash, false)
 	if err != nil {
 		return err
 	}
@@ -57,23 +61,38 @@ func (this *Transaction) Sign(key *rsa.PrivateKey) error {
 }
 
 func (this *Transaction) Verify(key *rsa.PublicKey) error {
-	hash := sha256.New()
-	if err := this.writeHash(hash); err != nil {
+	hash := sha256HashPool.Get().(hash.Hash)
+	defer sha256HashPool.Put(hash)
+	hash.Reset()
+	if err := this.write(hash, false); err != nil {
 		return err
 	}
 
 	return rsa.VerifyPSS(key, crypto.SHA256, hash.Sum(nil), this.signature, nil)
 }
 
-func (this *Transaction) writeHash(hash hash.Hash) error {
-	if _, err := hash.Write(this.src[:]); err != nil {
+func (this *Transaction) write(w io.Writer, includeSignature bool) error {
+	if _, err := w.Write(this.src[:]); err != nil {
 		return err
 	}
-	if _, err := hash.Write(this.dst[:]); err != nil {
+	if _, err := w.Write(this.dst[:]); err != nil {
 		return err
 	}
-	if err := binary.Write(hash, binary.LittleEndian, this.amount); err != nil {
+	if err := binary.Write(w, binary.LittleEndian, this.amount); err != nil {
 		return err
+	}
+	tsBytes, err := this.timestamp.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(tsBytes); err != nil {
+		return err
+	}
+
+	if includeSignature {
+		if _, err := w.Write(this.signature); err != nil {
+			return err
+		}
 	}
 
 	return nil

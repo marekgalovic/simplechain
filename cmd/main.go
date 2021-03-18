@@ -7,6 +7,7 @@ import (
 	// "crypto";
 	"crypto/rand";
 	"crypto/rsa";
+	// "crypto/sha256";
 
 	sch "github.com/marekgalovic/simplechain/pkg";
 )
@@ -32,15 +33,18 @@ func main() {
 	}
 	walletB := sch.NewWallet(addrB, pKeyB)
 
-	tA, err := walletA.CreateTransaction(walletB.Address(), 10)
+	tA, err := walletA.Send(walletB.Address(), 10)
 	if err != nil {
 		panic(err)
 	}
 
-	tB, err := walletB.CreateTransaction(walletA.Address(), 5)
+	tB, err := walletB.Send(walletA.Address(), 5)
 	if err != nil {
 		panic(err)
 	}
+
+	fmt.Println(tA.Verify(walletA.PublicKey()))
+	fmt.Println(tB.Verify(walletB.PublicKey()))
 
 	var firstBlock [32]byte
 	b := sch.NewBlock(firstBlock)
@@ -50,9 +54,18 @@ func main() {
 	m := sch.NewMiner(16)
 	defer m.Stop()
 	s := time.Now()
-	m.Mine(context.Background(), b)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+	go func() {
+		time.Sleep(10 * time.Second)
+		ctxCancel()
+	}()
+	if err := m.MineBlock(ctx, b); err != nil {
+		panic(err)
+	}
 	fmt.Println(time.Since(s))
+
+	fmt.Println(b.Hash())
+	fmt.Println(b.Nonce())
 	
-	fmt.Println(tA.Verify(walletA.PublicKey()))
-	fmt.Println(tB.Verify(walletB.PublicKey()))
 }

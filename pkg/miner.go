@@ -1,10 +1,10 @@
 package simplechain;
 
 import (
-	// "fmt";
 	"errors";
 	"context";
-	"crypto/sha256";
+	"bytes";
+	"hash";
 	"math/rand";
 )
 
@@ -46,27 +46,7 @@ func (this *Miner) Stop() {
 	this.ctxCancel()
 }
 
-// func (this *Miner) Mine(ctx context.Context, block *Block) ([]byte, error) {
-// 	hash := sha256.New()
-// 	if err := block.writeHash(hash); err != nil {
-// 		return nil, err
-// 	}
-
-// 	nonce := make([]byte, NONCE_SIZE)
-// 	for true {
-// 		if _, err := rand.Read(nonce); err != nil {
-// 			return nil, err
-// 		}
-
-// 		if this.isValidHashSum(hash.Sum(nonce)) {
-// 			return nonce, nil
-// 		}
-// 	}
-
-// 	return nil, nil
-// }
-
-func (this *Miner) Mine(ctx context.Context, block *Block) ([]byte, error) {
+func (this *Miner) MineBlock(ctx context.Context, block *Block) error {
 	task := &mineBlockTask{
 		ctx: ctx,
 		block: block,
@@ -78,24 +58,24 @@ func (this *Miner) Mine(ctx context.Context, block *Block) ([]byte, error) {
 		task.done = true
 	}()
 
-
 	for _, tch := range this.tasks {
 		select {
 		case tch <- task:
 		case <- task.ctx.Done():
-			return nil, task.ctx.Err()
+			return task.ctx.Err()
 		case <- this.ctx.Done():
-			return nil, this.ctx.Err()
+			return this.ctx.Err()
 		}
 	}
 
 	select {
 	case r := <- task.result:
-		return r, nil
+		block.setNonce(r)
+		return nil
 	case <- task.ctx.Done():
-		return nil, task.ctx.Err()
+		return task.ctx.Err()
 	case <- this.ctx.Done():
-		return nil, this.ctx.Err()
+		return this.ctx.Err()
 	}
 }
 
@@ -112,21 +92,34 @@ func (this *Miner) worker(tasks chan *mineBlockTask, seed int64) {
 }
 
 func (this *Miner) mineBlock(task *mineBlockTask, generator *rand.Rand) {
-	hash := sha256.New()
-	if err := task.block.writeHash(hash); err != nil {
+	hash := sha256HashPool.Get().(hash.Hash)
+	defer sha256HashPool.Put(hash)
+	
+	buffer := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buffer)
+	buffer.Reset()
+
+	if err := task.block.write(buffer); err != nil {
 		this.writeTaskError(task, err)
 		return
 	}
 
-	nonce := make([]byte, NONCE_SIZE)
+	blockBytes := buffer.Bytes()
+	n := len(blockBytes)
+
 	for !task.done || !this.stop {
-		if _, err := generator.Read(nonce); err != nil {
+		if _, err := generator.Read(blockBytes[n-NONCE_SIZE:n]); err != nil {
 			this.writeTaskError(task, err)
 			return
 		}
 
-		if this.isValidHashSum(hash.Sum(nonce)) {
-			this.writeTaskResult(task, nonce)
+		hash.Reset()
+		if _, err := hash.Write(blockBytes); err != nil {
+			this.writeTaskError(task, err)
+			return
+		}
+		if this.isValidHashSum(hash.Sum(nil)) {
+			this.writeTaskResult(task, blockBytes[n-NONCE_SIZE:n])
 			return
 		}
 	}
